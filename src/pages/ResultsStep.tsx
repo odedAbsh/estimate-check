@@ -4,7 +4,8 @@ import { analyzeProject, type Analysis, type QuoteAnalysis } from "../domain/ana
 import { getPlan } from "../domain/plans";
 import { getTrade } from "../domain/trades";
 import { FACTORS, formatMoney } from "../domain/quote";
-import { verificationProvider, type VerificationReport } from "../domain/verification";
+import type { VerificationReport } from "../domain/verification";
+import { verificationProvider } from "../lib/verify";
 import { navigate } from "../lib/router";
 import { PlanPicker } from "../components/PlanPicker";
 import { FlagList } from "../components/FlagList";
@@ -69,6 +70,7 @@ export function ResultsStep({ project, onChange }: Props) {
           business: plan.businessCheck,
           license: plan.licenseCheck,
           courtRecords: plan.courtRecords,
+          sample: project.sample,
         });
         return [q.id, { key: fingerprint(q, plan.id), report }] as const;
       }),
@@ -126,6 +128,13 @@ export function ResultsStep({ project, onChange }: Props) {
         </div>
       </div>
 
+      {project.sample && (
+        <p className="notice notice-warn">
+          This is a sample project. The contractors are made up, so every check here uses sample records. Start a new comparison to check real
+          contractors.
+        </p>
+      )}
+
       {tooMany && (
         <p className="notice notice-warn">
           Your {plan!.name} plan covers {plan!.maxQuotes} quotes and you have {project.quotes.length}.{" "}
@@ -159,7 +168,10 @@ export function ResultsStep({ project, onChange }: Props) {
               )}
             </>
           )}
-          <p className="demo-note">Background checks in this prototype use sample records, not real ones. Confirm licenses on your state board's website before signing.</p>
+          <p className="demo-note">
+            License checks use the state's official records where we have them (Oregon today); other states link you to the official lookup. Lawsuit and
+            business records are sample data in this prototype. Always confirm the license and insurance yourself before signing.
+          </p>
         </div>
       ) : (
         <div className="card verdict verdict-locked">

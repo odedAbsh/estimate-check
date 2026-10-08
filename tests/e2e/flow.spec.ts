@@ -118,3 +118,51 @@ test("a photo without AI reading gets a helpful message, not an error", async ({
   await page.getByRole("button", { name: "Read quote" }).click();
   await expect(page.getByRole("status")).toContainText(/Reading photos needs AI reading/);
 });
+
+async function oneRealQuote(page: Page, state: string, name: string, license: string) {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Compare my quotes" }).click();
+  await page.getByLabel("State").selectOption(state);
+  await page.getByRole("button", { name: "Continue to quotes" }).click();
+  await page.getByRole("button", { name: "Add a quote" }).click();
+  await page.getByLabel("Company name").fill(name);
+  await page.getByLabel("License number").fill(license);
+  await page.getByLabel("Total price").fill("12000");
+  await page.getByRole("button", { name: "Save quote" }).click();
+  await toResultsReal(page);
+}
+
+async function toResultsReal(page: Page) {
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("button", { name: "Compare my quotes" }).last().click();
+}
+
+test("Oregon: shows the official record and catches a license held by someone else", async ({ page }) => {
+  await page.route("**/api/license*", (route) =>
+    route.fulfill({
+      json: {
+        status: "active", number: "100215", classification: "Residential General Contractor", expires: "2028-02-06",
+        board: "Oregon Construction Contractors Board", source: "live", holderName: "BRUCE HUIE", nameMatch: false,
+        bond: { company: "WESTERN SURETY COMPANY", amount: 25000, expires: "2028-02-06" },
+        insurance: { company: "SCOTTSDALE INSURANCE CO", amount: 1000000, expires: "2027-08-25" },
+        lookupUrl: "https://www.oregon.gov/ccb/Pages/search.aspx",
+      },
+    }),
+  );
+  await oneRealQuote(page, "OR", "QuickFix Roofing", "100215");
+  await buy(page, "Verified", 39);
+  await expect(page.getByText("License belongs to a different name").first()).toBeVisible();
+  await expect(page.getByText("registered to BRUCE HUIE")).toBeVisible();
+  await expect(page.getByText(/Official record, Oregon Construction Contractors Board/)).toBeVisible();
+  await expect(page.getByText(/WESTERN SURETY COMPANY/)).toBeVisible();
+  await expect(page.getByRole("link", { name: /Check it yourself/ }).first()).toHaveAttribute("href", /oregon\.gov/);
+});
+
+test("a state we can't verify says so and links the official lookup instead of faking a result", async ({ page }) => {
+  await page.route("**/api/license*", (route) => route.fulfill({ json: { status: "unsupported" } }));
+  await oneRealQuote(page, "CA", "Blue Sky Roofing", "1234567");
+  await buy(page, "Verified", 39);
+  await expect(page.getByText("We can't verify licenses in this state yet").first()).toBeVisible();
+  await expect(page.getByText("Can't verify in this state yet")).toBeVisible();
+  await expect(page.getByRole("link", { name: /Check it yourself/ }).first()).toHaveAttribute("href", /cslb\.ca\.gov/);
+});

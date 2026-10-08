@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { TRADES, getTrade } from "../src/domain/trades";
+import { lookupLicense } from "./licenses";
 
 const MODEL = "claude-opus-5-5";
 
@@ -72,12 +73,27 @@ function sendError(res: Response, err: unknown) {
   return res.status(500).json({ error: "Something went wrong on our side. You can still fill in the form." });
 }
 
-export function createApp(client: ClaudeLike | null) {
+export function createApp(client: ClaudeLike | null, deps: { fetchImpl?: typeof fetch; now?: () => Date } = {}) {
   const app = express();
   app.use(express.json({ limit: "15mb" }));
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, ai: client != null });
+  });
+
+  app.get("/api/license", async (req: Request, res: Response) => {
+    const q = z
+      .object({ state: z.string().length(2), number: z.string().min(1).max(30), name: z.string().max(200).default("") })
+      .safeParse(req.query);
+    if (!q.success) return res.status(400).json({ error: "Send state, number and name." });
+    try {
+      const result = await lookupLicense(q.data.state, q.data.number, q.data.name, { fetchImpl: deps.fetchImpl, today: deps.now?.() });
+      if (!result) return res.json({ status: "unsupported" });
+      return res.json(result);
+    } catch (err) {
+      console.error("license lookup failed", err);
+      return res.status(502).json({ status: "unavailable" });
+    }
   });
 
   app.post("/api/extract", async (req: Request, res: Response) => {

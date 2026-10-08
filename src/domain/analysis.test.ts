@@ -140,3 +140,45 @@ describe("analyzeProject", () => {
     expect(a.quotes[0].flags.some((f) => f.code === "expired_quote")).toBe(true);
   });
 });
+
+describe("live license results", () => {
+  const base = { number: "100215", classification: "RGC", expires: "2028-02-06", board: "Oregon Construction Contractors Board", source: "live" as const };
+
+  function runWith(license: import("./verification").LicenseResult) {
+    const p = sampleProject();
+    p.plan = "plus";
+    const q = p.quotes[0];
+    return analyzeProject(p, { today, verifications: { [q.id]: { source: "live", checkedAt: today.toISOString(), license } } }).quotes[0];
+  }
+
+  it("flags a license that belongs to a different business as critical", () => {
+    const a = runWith({ ...base, status: "active", holderName: "BRUCE HUIE", nameMatch: false, bond: null, insurance: null });
+    expect(a.flags.find((f) => f.code === "license_name_mismatch")?.severity).toBe("critical");
+    expect(a.notRecommended).toBe(true);
+  });
+
+  it("warns when the state shows no bond or lapsed insurance", () => {
+    const a = runWith({ ...base, status: "active", nameMatch: true, bond: null, insurance: { company: "X", amount: 1_000_000, expires: "2026-01-01" } });
+    const codes = a.flags.map((f) => f.code);
+    expect(codes).toContain("bond_issue");
+    expect(codes).toContain("insurance_issue");
+  });
+
+  it("is quiet when the record is clean", () => {
+    const a = runWith({
+      ...base, status: "active", nameMatch: true,
+      bond: { company: "W", amount: 25000, expires: "2028-02-06" },
+      insurance: { company: "S", amount: 1_000_000, expires: "2027-08-25" },
+    });
+    expect(a.flags.some((f) => /license|bond|insurance_issue/.test(f.code))).toBe(false);
+    expect(a.factors.credentials.note).toContain("verified active in state records");
+  });
+
+  it("says plainly when a state can't be verified, with a link, and doesn't mark it as a red flag", () => {
+    const a = runWith({ status: "unsupported", number: "123", classification: "", expires: null, board: "California CSLB", source: "none", lookupUrl: "https://example.test/lookup" });
+    const f = a.flags.find((x) => x.code === "license_unsupported")!;
+    expect(f.severity).toBe("info");
+    expect(f.detail).toContain("https://example.test/lookup");
+    expect(a.notRecommended).toBe(false);
+  });
+});

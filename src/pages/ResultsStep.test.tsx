@@ -56,3 +56,17 @@ describe("ResultsStep", () => {
     await vi.waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ plan: "plus" })));
   });
 });
+
+describe("sample projects", () => {
+  it("say so, and never trigger real lookups", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const p = project();
+    p.sample = true;
+    p.plan = "plus";
+    render(<ResultsStep project={p} onChange={() => {}} />);
+    expect(screen.getByText(/This is a sample project/)).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(fetchSpy).not.toHaveBeenCalledWith(expect.stringContaining("/api/license"));
+    fetchSpy.mockRestore();
+  });
+});

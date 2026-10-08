@@ -1547,3 +1547,8 @@ textarea.input {
     transition-duration: 1ms !important;
   }
 }
+
+.src-line {
+  font-size: 0.8125rem;
+  font-weight: 400;
+}

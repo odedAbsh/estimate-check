@@ -133,11 +133,22 @@ function credentialsScore(q: Quote, trade: Trade, v?: VerificationReport): Facto
   const parts: string[] = [];
   let score: number;
   const lic = v?.license;
-  if (lic) {
+  if (lic && (lic.status === "unsupported" || lic.status === "unavailable")) {
+    score = 65;
+    parts.push(lic.status === "unsupported" ? `License given, can't verify in ${lic.board.split(" ")[0]} yet` : "License given, lookup unavailable");
+  } else if (lic) {
     score = lic.status === "active" ? 100 : lic.status === "not_provided" ? (trade.licenseUsuallyRequired ? 15 : 60) : 0;
+    if (lic.status === "active" && lic.nameMatch === false) score = 25;
     parts.push(
-      lic.status === "active" ? "License verified active" : lic.status === "not_provided" ? "No license number given" : `License ${lic.status.replace("_", " ")}`,
+      lic.status === "active"
+        ? lic.source === "live"
+          ? "License verified active in state records"
+          : "License verified active"
+        : lic.status === "not_provided"
+          ? "No license number given"
+          : `License ${lic.status.replace("_", " ")}`,
     );
+    if (lic.status === "active" && lic.nameMatch === false) parts.push("name doesn't match the license");
   } else if (q.contractor.licenseNumber.trim()) {
     score = 65;
     parts.push("License number given, not verified");
@@ -184,6 +195,31 @@ function buildFlags(
       code: `license_${lic.status}`,
       title: lic.status === "not_found" ? "License number not found" : `License ${lic.status}`,
       detail: `The ${lic.board} has no active license for #${lic.number}. Hiring an unlicensed contractor can void permits and insurance claims, and leaves you little legal recourse.`,
+    });
+  }
+  if (lic?.status === "active" && lic.nameMatch === false) {
+    flags.push({
+      severity: "critical",
+      code: "license_name_mismatch",
+      title: "License belongs to a different name",
+      detail: `License #${lic.number} is registered to "${lic.holderName}", not "${q.contractor.businessName}". Ask them to explain, and don't pay anything until it's cleared up.`,
+    });
+  }
+  if (lic?.status === "active" && lic.source === "live") {
+    const exp = (r: { expires: string | null } | null | undefined) => r?.expires != null && new Date(r.expires + "T23:59:59") < today;
+    if (lic.bond === null || exp(lic.bond)) {
+      flags.push({ severity: "warning", code: "bond_issue", title: lic.bond ? "Contractor bond has expired" : "No contractor bond on file", detail: "The bond is what you can claim against if the work is abandoned or defective. Ask for proof of a current bond." });
+    }
+    if (lic.insurance === null || exp(lic.insurance)) {
+      flags.push({ severity: "warning", code: "insurance_issue", title: lic.insurance ? "Liability insurance on file has expired" : "No liability insurance on file", detail: "The state's records show no current liability insurance. Ask for a certificate sent directly from their insurer." });
+    }
+  }
+  if (lic && (lic.status === "unsupported" || lic.status === "unavailable")) {
+    flags.push({
+      severity: "info",
+      code: lic.status === "unsupported" ? "license_unsupported" : "license_unavailable",
+      title: lic.status === "unsupported" ? "We can't verify licenses in this state yet" : "License lookup unavailable right now",
+      detail: `Check license #${lic.number} yourself on the official site: ${lic.lookupUrl ?? "your state's contractor licensing board"}. Look for an active status, the right classification, and the same business name.`,
     });
   }
   if (!q.contractor.licenseNumber.trim() && trade.licenseUsuallyRequired) {

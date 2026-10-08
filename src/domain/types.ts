@@ -76,6 +76,8 @@ export interface Project {
   priorities: Priorities | null;
   plan: PlanId | null;
   hiredQuoteId: string | null;
+  /** Built from the bundled sample quotes: never look these up in real records. */
+  sample?: boolean;
   /** Background-check results keyed by quote id, with the contractor fingerprint they were run for. */
   verifications: Record<string, { key: string; report: VerificationReport }>;
 }

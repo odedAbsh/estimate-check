@@ -47,7 +47,7 @@ export function QuotesStep({ project, onChange }: Props) {
       const q = mergeExtracted(emptyQuote(), { ...extractFromText(s.text, roofing), source: "text" });
       return { ...q, agent: { ...s.agent, comment: "" } };
     });
-    onChange({ ...project, tradeId: "roofing", state: project.state || "TX", title: project.title || "Roof replacement (sample)", quotes });
+    onChange({ ...project, tradeId: "roofing", state: project.state || "TX", title: project.title || "Roof replacement (sample)", quotes, sample: true });
   };
 
   return (

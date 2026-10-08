@@ -1,6 +1,12 @@
 import type { Contractor } from "./types";
 
-export type LicenseStatus = "active" | "expired" | "suspended" | "not_found" | "not_provided";
+export type LicenseStatus = "active" | "expired" | "suspended" | "not_found" | "not_provided" | "unsupported" | "unavailable";
+
+export interface CoverageRecord {
+  company: string;
+  amount: number | null;
+  expires: string | null; // ISO date
+}
 
 export interface LicenseResult {
   status: LicenseStatus;
@@ -8,6 +14,14 @@ export interface LicenseResult {
   classification: string;
   expires: string | null;
   board: string;
+  /** "live" = the state's own published records. "demo" = sample data. "none" = nothing was looked up. */
+  source?: "live" | "demo" | "none";
+  holderName?: string;
+  /** Does the business name on the quote match the name on the license? null when we can't tell. */
+  nameMatch?: boolean | null;
+  bond?: CoverageRecord | null;
+  insurance?: CoverageRecord | null;
+  lookupUrl?: string;
 }
 
 export type CaseType =
@@ -46,6 +60,8 @@ export interface VerificationOptions {
   business: boolean;
   license: boolean;
   courtRecords: boolean;
+  /** Sample projects use sample records only. */
+  sample?: boolean;
 }
 
 /**
@@ -127,9 +143,9 @@ export class DemoVerificationProvider implements VerificationProvider {
     if (opts.license) {
       const board = `${opts.state || "State"} contractor licensing board`;
       if (!c.licenseNumber.trim()) {
-        report.license = { status: "not_provided", number: "", classification: "", expires: null, board };
+        report.license = { status: "not_provided", number: "", classification: "", expires: null, board, source: "none" };
       } else if (profile === "unregistered") {
-        report.license = { status: "not_found", number: c.licenseNumber, classification: "", expires: null, board };
+        report.license = { status: "not_found", number: c.licenseNumber, classification: "", expires: null, board, source: "demo" };
       } else {
         const expires = new Date(now);
         expires.setMonth(expires.getMonth() + (profile === "expired" ? -5 : 14));
@@ -139,6 +155,7 @@ export class DemoVerificationProvider implements VerificationProvider {
           classification: opts.tradeLabel,
           expires: expires.toISOString().slice(0, 10),
           board,
+          source: "demo",
         };
       }
     }
@@ -193,4 +210,3 @@ export class DemoVerificationProvider implements VerificationProvider {
   }
 }
 
-export const verificationProvider: VerificationProvider = new DemoVerificationProvider();
