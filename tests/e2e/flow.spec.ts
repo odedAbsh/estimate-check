@@ -15,8 +15,20 @@ async function toResults(page: Page) {
   await expect(page.getByRole("heading", { name: "Roof replacement (sample)" })).toBeVisible();
 }
 
+let counter = 0;
+const uniqueEmail = () => `user${Date.now()}${counter++}${Math.floor(Math.random() * 1e6)}@example.com`;
+const PASSWORD = "correct horse battery";
+
+async function signUp(page: Page, email = uniqueEmail()) {
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Create account" }).click();
+  return email;
+}
+
 async function buy(page: Page, plan: "Essential" | "Verified" | "Advisor", price: number) {
   await page.getByRole("button", { name: /Unlock from/ }).click();
+  if (await page.getByRole("heading", { name: "Create your account" }).isVisible()) await signUp(page);
   await page.getByRole("dialog").getByText(plan, { exact: true }).click();
   await page.getByRole("button", { name: new RegExp(`Pay \\$${price}`) }).click();
 }
@@ -165,4 +177,89 @@ test("a state we can't verify says so and links the official lookup instead of f
   await expect(page.getByText("We can't verify licenses in this state yet").first()).toBeVisible();
   await expect(page.getByText("Can't verify in this state yet")).toBeVisible();
   await expect(page.getByRole("link", { name: /Check it yourself/ }).first()).toHaveAttribute("href", /cslb\.ca\.gov/);
+});
+
+test("unlocking asks you to create an account first, and keeps your quotes", async ({ page }) => {
+  await startWithSamples(page);
+  await toResults(page);
+  await page.getByRole("button", { name: /Unlock from/ }).click();
+  await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
+  // Declining leaves you where you were.
+  await page.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByRole("heading", { name: "Roof replacement (sample)" })).toBeVisible();
+  await page.getByRole("button", { name: /Unlock from/ }).click();
+  await page.getByLabel("Email").fill("not-an-email");
+  await page.getByLabel("Password").fill("short");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByRole("alert")).toContainText(/valid email/);
+  await page.getByLabel("Email").fill(uniqueEmail());
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByRole("alert")).toContainText(/at least 10/);
+  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByRole("heading", { name: "Unlock your recommendation" })).toBeVisible();
+});
+
+test("a paid project follows you to another browser after you sign in", async ({ page, browser }) => {
+  await startWithSamples(page);
+  await toResults(page);
+  await page.getByRole("button", { name: /Unlock from/ }).click();
+  const email = await signUp(page);
+  await page.getByRole("dialog").getByText("Verified", { exact: true }).click();
+  await page.getByRole("button", { name: /Pay \$39/ }).click();
+  await expect(page.getByRole("heading", { name: "Hire Summit Roofing LLC." })).toBeVisible();
+  await expect.poll(async () => ((await (await page.request.get("/api/projects")).json()).projects ?? []).length).toBe(1);
+
+  const other = await browser.newContext();
+  const page2 = await other.newPage();
+  await page2.goto("/");
+  await page2.getByRole("button", { name: "Sign in" }).click();
+  await page2.getByRole("button", { name: "I already have an account" }).click();
+  await page2.getByLabel("Email").fill(email);
+  await page2.getByLabel("Password").fill("wrong password!!");
+  await page2.getByRole("dialog").getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page2.getByRole("alert")).toContainText(/don't match/);
+  await page2.getByLabel("Password").fill(PASSWORD);
+  await page2.getByRole("dialog").getByRole("button", { name: "Sign in", exact: true }).click();
+  await page2.getByRole("link", { name: /Roof replacement \(sample\)/ }).click();
+  await expect(page2.getByRole("heading", { name: "Hire Summit Roofing LLC." })).toBeVisible();
+  await other.close();
+});
+
+test("signing out clears this browser", async ({ page }) => {
+  await startWithSamples(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await signUp(page);
+  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(page.getByRole("link", { name: /Roof replacement/ })).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem("estimate-check:projects:v1"))).toBe("[]");
+});
+
+test("returning from Stripe confirms the payment and unlocks the comparison", async ({ page }) => {
+  let paid = false;
+  await startWithSamples(page);
+  await toResults(page);
+  const id = page.url().match(/#\/p\/([\w-]+)\//)![1];
+  await page.route("**/api/config", (r) => r.fulfill({ json: { payments: "stripe" } }));
+  await page.route(`**/api/projects/${id}/checkout`, (r) => r.fulfill({ json: { url: `${new URL(page.url()).origin}/#/p/${id}/results?session_id=cs_test_123` } }));
+  await page.route("**/api/billing/confirm", (r) => {
+    paid = true;
+    return r.fulfill({ json: { paid: true, projectId: id, plan: "plus" } });
+  });
+  await page.route(`**/api/projects/${id}`, async (r) => {
+    if (r.request().method() === "GET" && paid) {
+      const real = await r.fetch();
+      const body = await real.json();
+      return r.fulfill({ json: { project: { ...body.project, plan: "plus" } } });
+    }
+    return r.fallback();
+  });
+  await page.reload(); // pick up the mocked payments mode
+  await page.getByRole("button", { name: /Unlock from/ }).click();
+  await signUp(page);
+  await expect(page.getByText("You'll pay securely on Stripe")).toBeVisible();
+  await page.getByRole("button", { name: /Pay \$39/ }).click();
+  await expect(page.getByText("Payment received. Your comparison is unlocked.")).toBeVisible();
 });

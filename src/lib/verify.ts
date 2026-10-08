@@ -4,13 +4,13 @@ import { DemoVerificationProvider, type LicenseResult, type VerificationOptions,
 
 const demo = new DemoVerificationProvider();
 
-async function liveLicense(c: Contractor, state: string): Promise<LicenseResult> {
+async function liveLicense(c: Contractor, state: string, projectId: string): Promise<LicenseResult> {
   const board = getLicenseSource(state)?.agency ?? `${state} contractor licensing board`;
   const lookupUrl = boardLookupUrl(state);
   const number = c.licenseNumber.trim();
   if (!number) return { status: "not_provided", number: "", classification: "", expires: null, board, source: "none", lookupUrl };
   try {
-    const qs = new URLSearchParams({ state, number, name: c.businessName });
+    const qs = new URLSearchParams({ state, number, name: c.businessName, projectId });
     const res = await fetch(`/api/license?${qs}`);
     const body = (await res.json()) as Partial<LicenseResult>;
     if (res.ok && body.status && body.status !== "unsupported") return { ...(body as LicenseResult), lookupUrl: body.lookupUrl ?? lookupUrl };
@@ -32,7 +32,7 @@ export const verificationProvider: VerificationProvider = {
   async verify(c: Contractor, opts: VerificationOptions): Promise<VerificationReport> {
     if (opts.sample) return demo.verify(c, opts);
     const report = await demo.verify(c, { ...opts, license: false });
-    if (opts.license) report.license = await liveLicense(c, opts.state);
+    if (opts.license) report.license = await liveLicense(c, opts.state, opts.projectId ?? "");
     return report;
   },
 };

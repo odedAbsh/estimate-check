@@ -62,6 +62,8 @@ export interface VerificationOptions {
   courtRecords: boolean;
   /** Sample projects use sample records only. */
   sample?: boolean;
+  /** Which project is asking; the server checks it has paid for license checks. */
+  projectId?: string;
 }
 
 /**

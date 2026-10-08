@@ -49,9 +49,9 @@ export async function extractQuote(trade: Trade, input: { text?: string; file?: 
   return { data: { ...extractFromText(text ?? "", trade), source: "text" }, method: "local" };
 }
 
-export async function askAdvisor(question: string, context: string, history: { role: "user" | "assistant"; content: string }[]): Promise<string | null> {
+export async function askAdvisor(projectId: string, question: string, context: string, history: { role: "user" | "assistant"; content: string }[]): Promise<string | null> {
   try {
-    const r = await postJson<{ answer?: string; error?: string }>("/api/advisor", { question, context, history });
+    const r = await postJson<{ answer?: string; error?: string }>("/api/advisor", { projectId, question, context, history });
     if (r.status === 200 && r.body?.answer) return r.body.answer;
     return null;
   } catch {

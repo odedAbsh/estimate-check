@@ -1,6 +1,7 @@
 // @vitest-environment node
 import request from "supertest";
 import { createApp } from "./app";
+import { openDb } from "./db";
 import { lookupLicense, namesMatch, usDateToIso } from "./licenses";
 
 // Shape copied from a real record in the Oregon CCB "Active Licenses" dataset (data.oregon.gov g77e-6bhs).
@@ -97,23 +98,34 @@ describe("Oregon CCB lookup", () => {
 });
 
 describe("GET /api/license", () => {
+  async function paidApp(fetchImpl: typeof fetch) {
+    const app = createApp(null, { db: openDb(":memory:"), fetchImpl, now: () => today, demoCheckout: true });
+    const agent = request.agent(app);
+    await agent.post("/api/auth/register").send({ email: "a@example.com", password: "correct horse battery" });
+    await agent.put("/api/projects/p_abc123").send({ id: "p_abc123", quotes: [] });
+    await agent.post("/api/projects/p_abc123/checkout").send({ plan: "plus" });
+    return agent;
+  }
+  const q = (over = {}) => ({ state: "OR", number: "100215", name: "Bruce Huie", projectId: "p_abc123", ...over });
+
   it("returns the live record", async () => {
-    const app = createApp(null, { fetchImpl: fakeFetch([row]).impl, now: () => today });
-    const r = await request(app).get("/api/license").query({ state: "OR", number: "100215", name: "Bruce Huie" });
+    const agent = await paidApp(fakeFetch([row]).impl);
+    const r = await agent.get("/api/license").query(q());
     expect(r.status).toBe(200);
     expect(r.body.status).toBe("active");
   });
   it("says unsupported for other states instead of inventing data", async () => {
-    const r = await request(createApp(null)).get("/api/license").query({ state: "CA", number: "123456", name: "X" });
-    expect(r.body).toEqual({ status: "unsupported" });
+    const agent = await paidApp(fakeFetch([row]).impl);
+    expect((await agent.get("/api/license").query(q({ state: "CA" }))).body).toEqual({ status: "unsupported" });
   });
   it("says unavailable when the state is down", async () => {
-    const app = createApp(null, { fetchImpl: fakeFetch([], 503).impl });
-    const r = await request(app).get("/api/license").query({ state: "OR", number: "100215", name: "X" });
+    const agent = await paidApp(fakeFetch([], 503).impl);
+    const r = await agent.get("/api/license").query(q());
     expect(r.status).toBe(502);
     expect(r.body.status).toBe("unavailable");
   });
   it("validates input", async () => {
-    expect((await request(createApp(null)).get("/api/license").query({ state: "Oregon", number: "1" })).status).toBe(400);
+    const agent = await paidApp(fakeFetch([row]).impl);
+    expect((await agent.get("/api/license").query(q({ state: "Oregon" }))).status).toBe(400);
   });
 });

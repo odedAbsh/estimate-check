@@ -8,15 +8,18 @@ interface Props {
   quoteCount: number;
   currentPlan: PlanId | null;
   onClose: () => void;
-  onPurchase: (plan: PlanId) => void;
+  mode: "stripe" | "demo" | "off";
+  /** Resolves to an error message, or null when it worked (or the browser is leaving for Stripe). */
+  onPurchase: (plan: PlanId) => Promise<string | null>;
 }
 
-export function PlanPicker({ open, quoteCount, currentPlan, onClose, onPurchase }: Props) {
+export function PlanPicker({ open, quoteCount, currentPlan, mode, onClose, onPurchase }: Props) {
   const current = getPlan(currentPlan);
   const available = PLANS.filter((p) => !current || p.price > current.price);
   const recommended = available.find((p) => p.maxQuotes >= quoteCount && p.licenseCheck) ?? available.find((p) => p.maxQuotes >= quoteCount);
   const [selected, setSelected] = useState<PlanId | null>(null);
   const [paying, setPaying] = useState(false);
+  const [error, setError] = useState("");
   const chosen = getPlan(selected ?? recommended?.id ?? null);
   const due = chosen ? chosen.price - (current?.price ?? 0) : 0;
 
@@ -30,20 +33,21 @@ export function PlanPicker({ open, quoteCount, currentPlan, onClose, onPurchase 
       onClose={onClose}
       footer={
         <>
-          <p className="footer-note">Demo checkout. No card is charged in this prototype.</p>
+          <p className="footer-note">
+            {mode === "stripe" ? "You'll pay securely on Stripe. We never see your card." : mode === "demo" ? "Demo checkout. No card is charged in this prototype." : "Payments are unavailable right now."}
+          </p>
           <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
           <button
             className="btn btn-primary"
-            disabled={!chosen || !fits(chosen) || paying}
+            disabled={!chosen || !fits(chosen) || paying || mode === "off"}
             aria-busy={paying}
-            onClick={() => {
+            onClick={async () => {
               if (!chosen) return;
               setPaying(true);
-              // Simulated payment round-trip so the flow feels like the real one.
-              setTimeout(() => {
-                onPurchase(chosen.id);
-                setPaying(false);
-              }, 400);
+              setError("");
+              const err = await onPurchase(chosen.id);
+              if (err) setError(err);
+              setPaying(false);
             }}
           >
             {paying ? <span className="spinner" aria-hidden="true" /> : null}
@@ -52,6 +56,11 @@ export function PlanPicker({ open, quoteCount, currentPlan, onClose, onPurchase 
         </>
       }
     >
+      {error && (
+        <p role="alert" className="notice notice-warn">
+          {error}
+        </p>
+      )}
       <p className="muted">You have {quoteCount} quote{quoteCount === 1 ? "" : "s"}. One-time payment for this project.</p>
       <div className="plans-grid" role="radiogroup" aria-label="Plans">
         {available.map((p) => {

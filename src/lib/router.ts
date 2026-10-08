@@ -12,7 +12,15 @@ export const STEPS: { id: StepId; label: string }[] = [
   { id: "results", label: "Results" },
 ];
 
+/** Query string inside the hash, e.g. #/p/abc/results?session_id=cs_123 */
+export function hashQuery(hash = window.location.hash): URLSearchParams {
+  const i = hash.indexOf("?");
+  return new URLSearchParams(i >= 0 ? hash.slice(i + 1) : "");
+}
+
 export function parseHash(hash: string): Route {
+  const q = hash.indexOf("?");
+  if (q >= 0) hash = hash.slice(0, q);
   const m = hash.match(/^#\/p\/([\w-]+)\/(job|quotes|priorities|results)$/);
   if (m) return { name: "step", projectId: m[1], step: m[2] as StepId };
   return { name: "home" };

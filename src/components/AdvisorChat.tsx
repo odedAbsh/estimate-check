@@ -19,7 +19,7 @@ function renderText(t: string) {
   ));
 }
 
-export function AdvisorChat({ analysis, context }: { analysis: Analysis; context: string }) {
+export function AdvisorChat({ projectId, analysis, context }: { projectId: string; analysis: Analysis; context: string }) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -34,7 +34,7 @@ export function AdvisorChat({ analysis, context }: { analysis: Analysis; context
     setMessages([...history, { role: "user", content: question }]);
     setInput("");
     setBusy(true);
-    const ai = offline ? null : await askAdvisor(question, context, history);
+    const ai = offline ? null : await askAdvisor(projectId, question, context, history);
     if (ai == null) setOffline(true);
     setMessages((m) => [...m, { role: "assistant", content: ai ?? localAdvisorAnswer(question, analysis) }]);
     setBusy(false);

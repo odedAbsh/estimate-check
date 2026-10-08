@@ -12,7 +12,7 @@ export default defineConfig({
     url: "http://localhost:4173/api/health",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
-    env: { ANTHROPIC_API_KEY: "" },
+    env: { ANTHROPIC_API_KEY: "", STRIPE_SECRET_KEY: "", DATABASE_PATH: ":memory:", ALLOW_DEMO_CHECKOUT: "1", INSECURE_COOKIES: "1" },
   },
   projects: [
     { name: "desktop", use: { ...devices["Desktop Chrome"], launchOptions: { executablePath } } },

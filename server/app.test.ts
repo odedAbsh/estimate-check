@@ -71,9 +71,14 @@ describe("API with an AI key", () => {
     expect((await request(createApp(fakeClient("not json").client)).post("/api/extract").send({ tradeId: "roofing", text: "x" })).status).toBe(500);
   });
 
-  it("answers advisor questions with the analysis as context", async () => {
+  it("answers advisor questions with the analysis as context (Advisor plan)", async () => {
     const { client, calls } = fakeClient("Hire Summit.");
-    const r = await request(createApp(client)).post("/api/advisor").send({ question: "Who?", context: "ANALYSIS", history: [] });
+    const app = createApp(client, { demoCheckout: true });
+    const agent = request.agent(app);
+    await agent.post("/api/auth/register").send({ email: "a@example.com", password: "correct horse battery" });
+    await agent.put("/api/projects/p_abc123").send({ id: "p_abc123", quotes: [] });
+    await agent.post("/api/projects/p_abc123/checkout").send({ plan: "pro" });
+    const r = await agent.post("/api/advisor").send({ question: "Who?", context: "ANALYSIS", history: [], projectId: "p_abc123" });
     expect(r.body.answer).toBe("Hire Summit.");
     expect(calls[0].system).toContain("ANALYSIS");
   });

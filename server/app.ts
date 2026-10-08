@@ -4,6 +4,11 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { TRADES, getTrade } from "../src/domain/trades";
 import { lookupLicense } from "./licenses";
+import { getPlan } from "../src/domain/plans";
+import { authRoutes, sameOriginOnly, sessionMiddleware } from "./auth";
+import { billingRoutes, webhookRoute, type BillingConfig, type StripeLike } from "./billing";
+import { openDb, type Db } from "./db";
+import { planOf, projectRoutes } from "./projects";
 
 const MODEL = "claude-opus-5-5";
 
@@ -51,6 +56,7 @@ const ExtractedSchema = z.object({
 });
 
 const AdvisorRequest = z.object({
+  projectId: z.string().max(80),
   question: z.string().min(1).max(2000),
   context: z.string().max(60_000),
   history: z
@@ -73,19 +79,73 @@ function sendError(res: Response, err: unknown) {
   return res.status(500).json({ error: "Something went wrong on our side. You can still fill in the form." });
 }
 
-export function createApp(client: ClaudeLike | null, deps: { fetchImpl?: typeof fetch; now?: () => Date } = {}) {
+export interface AppDeps {
+  db?: Db;
+  stripe?: StripeLike | null;
+  stripeWebhookSecret?: string;
+  publicUrl?: string | null;
+  demoCheckout?: boolean;
+  secureCookies?: boolean;
+  fetchImpl?: typeof fetch;
+  now?: () => Date;
+}
+
+/** Fixed-window limiter by key, for endpoints that cost money (AI) or can be guessed at. */
+function rateLimit(max: number, windowMs: number, now: () => Date, key: (req: Request) => string): express.RequestHandler {
+  const hits = new Map<string, { n: number; reset: number }>();
+  return (req, res, next) => {
+    const t = now().getTime();
+    const k = key(req);
+    const h = hits.get(k);
+    if (!h || h.reset < t) hits.set(k, { n: 1, reset: t + windowMs });
+    else if (++h.n > max) return res.status(429).json({ error: "Too many requests. Try again in a little while." });
+    next();
+  };
+}
+
+export function createApp(client: ClaudeLike | null, deps: AppDeps = {}) {
+  const now = deps.now ?? (() => new Date());
+  const db = deps.db ?? openDb(":memory:");
+  const billing: BillingConfig = {
+    stripe: deps.stripe ?? null,
+    webhookSecret: deps.stripeWebhookSecret ?? "",
+    publicUrl: deps.publicUrl ?? null,
+    demoCheckout: deps.demoCheckout ?? false,
+    now,
+  };
+  const authCfg = { secureCookies: deps.secureCookies ?? false, now };
+
   const app = express();
+  app.set("trust proxy", 1);
+  // Stripe signs the raw body, so this route must come before the JSON parser.
+  app.post("/api/stripe/webhook", express.raw({ type: "application/json", limit: "1mb" }), webhookRoute(db, billing));
   app.use(express.json({ limit: "15mb" }));
+  app.use(sameOriginOnly(() => (deps.publicUrl ? [deps.publicUrl] : [])));
+  app.use(sessionMiddleware(db, authCfg));
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, ai: client != null });
   });
+
+  app.use("/api/auth", authRoutes(db, authCfg));
+  app.use("/api/projects", projectRoutes(db, now));
+  app.use("/api", billingRoutes(db, billing));
+
+  /** Plan entitlement for the signed-in user's project, or null. */
+  const entitlement = (req: Request) => {
+    const projectId = typeof req.query.projectId === "string" ? req.query.projectId : typeof req.body?.projectId === "string" ? req.body.projectId : "";
+    if (!req.user || !projectId) return null;
+    const owned = db.prepare("SELECT 1 FROM projects WHERE id = ? AND user_id = ?").get(projectId, req.user.id);
+    return owned ? getPlan(planOf(db, projectId)) : null;
+  };
 
   app.get("/api/license", async (req: Request, res: Response) => {
     const q = z
       .object({ state: z.string().length(2), number: z.string().min(1).max(30), name: z.string().max(200).default("") })
       .safeParse(req.query);
     if (!q.success) return res.status(400).json({ error: "Send state, number and name." });
+    if (!req.user) return res.status(401).json({ error: "Sign in to run license checks.", code: "auth_required" });
+    if (!entitlement(req)?.licenseCheck) return res.status(402).json({ error: "License verification is part of the Verified plan.", code: "plan_required" });
     try {
       const result = await lookupLicense(q.data.state, q.data.number, q.data.name, { fetchImpl: deps.fetchImpl, today: deps.now?.() });
       if (!result) return res.json({ status: "unsupported" });
@@ -96,7 +156,7 @@ export function createApp(client: ClaudeLike | null, deps: { fetchImpl?: typeof 
     }
   });
 
-  app.post("/api/extract", async (req: Request, res: Response) => {
+  app.post("/api/extract", rateLimit(30, 60 * 60 * 1000, now, (r) => r.user?.id ?? r.ip ?? "anon"), async (req: Request, res: Response) => {
     if (!client) return res.status(503).json({ error: "AI reading isn't set up on this server.", code: "ai_disabled" });
     const parsed = ExtractRequest.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid request" });
@@ -150,6 +210,8 @@ Checklist: ${trade.scope.map((s) => `${s.id} = ${s.label}`).join("; ")}
 
   app.post("/api/advisor", async (req: Request, res: Response) => {
     if (!client) return res.status(503).json({ error: "The AI advisor isn't set up on this server.", code: "ai_disabled" });
+    if (!req.user) return res.status(401).json({ error: "Sign in to use the advisor.", code: "auth_required" });
+    if (!entitlement(req)?.advisorChat) return res.status(402).json({ error: "The advisor is part of the Advisor plan.", code: "plan_required" });
     const parsed = AdvisorRequest.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid request" });
     const { question, context, history } = parsed.data;

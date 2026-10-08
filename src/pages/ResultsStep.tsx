@@ -6,7 +6,10 @@ import { getTrade } from "../domain/trades";
 import { FACTORS, formatMoney } from "../domain/quote";
 import type { VerificationReport } from "../domain/verification";
 import { verificationProvider } from "../lib/verify";
-import { navigate } from "../lib/router";
+import { hashQuery, navigate } from "../lib/router";
+import { useApp } from "../lib/AppContext";
+import { api } from "../lib/session";
+import type { PlanId } from "../domain/types";
 import { PlanPicker } from "../components/PlanPicker";
 import { FlagList } from "../components/FlagList";
 import { VerificationPanel } from "../components/VerificationPanel";
@@ -51,7 +54,9 @@ function buildAdvisorContext(project: Project, analysis: Analysis): string {
 export function ResultsStep({ project, onChange }: Props) {
   const trade = getTrade(project.tradeId);
   const plan = getPlan(project.plan);
+  const { user, payments, requireAccount, flushProject, refreshProject } = useApp();
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [payNote, setPayNote] = useState<{ kind: "ok" | "warn"; text: string } | null>(null);
   const [checking, setChecking] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -71,6 +76,7 @@ export function ResultsStep({ project, onChange }: Props) {
           license: plan.licenseCheck,
           courtRecords: plan.courtRecords,
           sample: project.sample,
+          projectId: project.id,
         });
         return [q.id, { key: fingerprint(q, plan.id), report }] as const;
       }),
@@ -96,6 +102,50 @@ export function ResultsStep({ project, onChange }: Props) {
   const ordered = unlocked ? analysis.ranking.map((id) => analysis.quotes.find((a) => a.quoteId === id)!) : analysis.quotes;
   const tooMany = plan && project.quotes.length > plan.maxQuotes;
   const recommended = analysis.quotes.find((a) => a.quoteId === analysis.recommendedId);
+
+  const openPicker = async () => {
+    if (!(await requireAccount("Create a free account to unlock this comparison. Your quotes are saved to it, so you can come back from any device."))) return;
+    await flushProject(project.id);
+    setPickerOpen(true);
+  };
+
+  const purchase = async (planId: PlanId): Promise<string | null> => {
+    await flushProject(project.id);
+    const r = await api<{ url?: string; demo?: boolean; error?: string }>(`/api/projects/${project.id}/checkout`, "POST", { plan: planId });
+    if (!r.ok) return r.body.error ?? "We couldn't start the payment. Nothing was charged.";
+    if (r.body.url) {
+      window.location.assign(r.body.url);
+      return null;
+    }
+    await refreshProject(project.id);
+    setPickerOpen(false);
+    return null;
+  };
+
+  // Coming back from Stripe: confirm the payment directly instead of waiting on the webhook.
+  const returnedSession = hashQuery().get("session_id");
+  useEffect(() => {
+    if (!returnedSession || !user) return;
+    let cancelled = false;
+    setPayNote({ kind: "ok", text: "Confirming your payment…" });
+    (async () => {
+      const r = await api<{ paid?: boolean; error?: string }>("/api/billing/confirm", "POST", { sessionId: returnedSession });
+      if (cancelled) return;
+      if (r.ok && r.body.paid) {
+        await refreshProject(project.id);
+        setPayNote({ kind: "ok", text: "Payment received. Your comparison is unlocked." });
+      } else if (r.ok) {
+        setPayNote({ kind: "warn", text: "Your payment is still processing. This page will unlock as soon as it clears; refresh in a minute." });
+      } else {
+        setPayNote({ kind: "warn", text: r.body.error ?? "We couldn't confirm the payment yet. If you were charged, it will show up shortly." });
+      }
+      history.replaceState(null, "", `#/p/${project.id}/results`);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [returnedSession, user?.id]);
 
   const copyQuestions = async (a: QuoteAnalysis) => {
     try {
@@ -128,6 +178,12 @@ export function ResultsStep({ project, onChange }: Props) {
         </div>
       </div>
 
+      {payNote && (
+        <p role="status" className={`notice notice-${payNote.kind}`}>
+          {payNote.text}
+        </p>
+      )}
+
       {project.sample && (
         <p className="notice notice-warn">
           This is a sample project. The contractors are made up, so every check here uses sample records. Start a new comparison to check real
@@ -138,7 +194,7 @@ export function ResultsStep({ project, onChange }: Props) {
       {tooMany && (
         <p className="notice notice-warn">
           Your {plan!.name} plan covers {plan!.maxQuotes} quotes and you have {project.quotes.length}.{" "}
-          <button className="link-btn" onClick={() => setPickerOpen(true)}>Upgrade</button> or remove a quote.
+          <button className="link-btn" onClick={openPicker}>Upgrade</button> or remove a quote.
         </p>
       )}
 
@@ -182,7 +238,7 @@ export function ResultsStep({ project, onChange }: Props) {
               Unlock the verdict, a license and lawsuit check on every contractor, and the questions to ask before you sign. The comparison
               below is free.
             </p>
-            <button className="btn btn-primary btn-lg" onClick={() => setPickerOpen(true)}>Unlock from $29</button>
+            <button className="btn btn-primary btn-lg" onClick={openPicker}>Unlock from $29</button>
           </div>
         </div>
       )}
@@ -259,7 +315,7 @@ export function ResultsStep({ project, onChange }: Props) {
       <ComparisonTable analysis={analysis} project={project} trade={trade} showScores={unlocked} />
 
       {plan?.advisorChat ? (
-        <AdvisorChat analysis={analysis} context={buildAdvisorContext(project, analysis)} />
+        <AdvisorChat projectId={project.id} analysis={analysis} context={buildAdvisorContext(project, analysis)} />
       ) : unlocked ? (
         <div className="card upsell">
           <div>
@@ -269,7 +325,7 @@ export function ResultsStep({ project, onChange }: Props) {
               an advisor you can ask anything about these quotes.
             </p>
           </div>
-          <button className="btn btn-secondary" onClick={() => setPickerOpen(true)}>Upgrade</button>
+          <button className="btn btn-secondary" onClick={openPicker}>Upgrade</button>
         </div>
       ) : null}
 
@@ -278,11 +334,9 @@ export function ResultsStep({ project, onChange }: Props) {
           open
           quoteCount={project.quotes.length}
           currentPlan={project.plan}
+          mode={payments}
           onClose={() => setPickerOpen(false)}
-          onPurchase={(planId) => {
-            onChange({ ...project, plan: planId });
-            setPickerOpen(false);
-          }}
+          onPurchase={purchase}
         />
       )}
     </section>

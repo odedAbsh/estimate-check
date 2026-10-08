@@ -1552,3 +1552,28 @@ textarea.input {
   font-size: 0.8125rem;
   font-weight: 400;
 }
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.account-email {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.875rem;
+}
+.save-state {
+  font-size: 0.8125rem;
+  color: var(--text-2);
+  min-width: 56px;
+}
+@media (max-width: 640px) {
+  .account-email,
+  .save-state {
+    display: none;
+  }
+}
